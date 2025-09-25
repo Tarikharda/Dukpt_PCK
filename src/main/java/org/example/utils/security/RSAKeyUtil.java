@@ -18,7 +18,8 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.example.utils.Converter;
 
-import java.security.interfaces.RSAPublicKey;
+import java.security.spec.RSAPublicKeySpec;
+
 public class RSAKeyUtil {
 
     static {
@@ -28,15 +29,17 @@ public class RSAKeyUtil {
     private final String keyStoreFile = "pos_keystore.p12";
     private final String keyStorePassword = "changeit";
     private final String keyAlias = "pos_rsa";
+    private final String ALGORITHM = "RSA/ECB/PKCS1Padding";
+    private final String PKCS12= "PKCS12";
 
 
     // Generate RSA Key Pair and store in PKCS12 KeyStore
     public void generateRSAKey() throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        KeyStore keyStore = KeyStore.getInstance(PKCS12);
         try (FileInputStream fis = new FileInputStream(keyStoreFile)) {
             keyStore.load(fis, keyStorePassword.toCharArray());
         } catch (Exception e) {
-            keyStore.load(null, null); // empty KeyStore
+            keyStore.load(null, null);
         }
 
         if (keyStore.containsAlias(keyAlias)) {
@@ -52,7 +55,7 @@ public class RSAKeyUtil {
         // Optional self-signed certificate (100 years)
         X500Principal subject = new X500Principal("CN=" + keyAlias);
         long validFrom = System.currentTimeMillis();
-        long validUntil = validFrom + (100L * 365 * 24 * 60 * 60 * 1000); // 100 years
+        long validUntil = validFrom + (100L * 365 * 24 * 60 * 60 * 1000);
         X509Certificate cert = generateSelfSignedCertificate(keyPair, subject, validFrom, validUntil);
 
         keyStore.setKeyEntry(keyAlias, keyPair.getPrivate(), keyStorePassword.toCharArray(), new Certificate[]{cert});
@@ -83,8 +86,8 @@ public class RSAKeyUtil {
 
     // Encrypt using public key
     public String encrypt(String plainText) throws Exception {
-        RSAPublicKey publicKey = getPublicKey();
-        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        PublicKey publicKey = getPublicKey();
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.ENCRYPT_MODE, publicKey);
         byte[] encrypted = cipher.doFinal(plainText.getBytes());
         return Converter.byteArrayToHexString_2(encrypted);
@@ -92,31 +95,63 @@ public class RSAKeyUtil {
 
     // Decrypt using private key
     public String decrypt(String hexCipherText) throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        KeyStore keyStore = KeyStore.getInstance(PKCS12);
         try (FileInputStream fis = new FileInputStream(keyStoreFile)) {
             keyStore.load(fis, keyStorePassword.toCharArray());
         }
         PrivateKey privateKey = (PrivateKey) keyStore.getKey(keyAlias, keyStorePassword.toCharArray());
-        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.DECRYPT_MODE, privateKey);
         byte[] decrypted = cipher.doFinal(Converter.hexStringToByteArray_2(hexCipherText));
         return new String(decrypted);
     }
 
+    public String decryptBySenderPK(PublicKey senderPublicKey , String encryptedData) throws Exception {
+        byte[] signature = Converter.hexStringToByteArray_2(encryptedData);
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.DECRYPT_MODE, senderPublicKey);
+        return Converter.byteArrayToHexString_2(cipher.doFinal(signature));
+
+    }
+
+    public PublicKey hexToPublicKey(String senderPk) throws Exception {
+
+        if(senderPk.length() == 276){
+            senderPk = senderPk.substring(14, senderPk.length() - 6);
+        }else if(senderPk.length() == 274){
+            senderPk = senderPk.substring(12, senderPk.length() - 6);
+        } else if(senderPk.length() == 534){
+            senderPk = senderPk.substring(16, senderPk.length() - 6);
+        } else if (senderPk.length() == 536){
+            senderPk = senderPk.substring(18, senderPk.length() - 6);
+        }else{
+            return null;
+        }
+
+        BigInteger modulus = new BigInteger(senderPk, 16);
+        BigInteger exponent = new BigInteger("03", 16);
+
+        RSAPublicKeySpec spec = new RSAPublicKeySpec(modulus, exponent);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        return keyFactory.generatePublic(spec);
+    }
+
+
+
     // Return public key in DER format (hex)
     public String getPublicKeyDERHex() throws Exception {
-        RSAPublicKey publicKey = getPublicKey();
+        PublicKey publicKey = getPublicKey();
         byte[] derBytes = publicKey.getEncoded(); // ASN.1 DER SubjectPublicKeyInfo
         return Converter.byteArrayToHexString_2(derBytes);
     }
 
-    private RSAPublicKey getPublicKey() throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+    private PublicKey getPublicKey() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance(PKCS12);
         try (FileInputStream fis = new FileInputStream(keyStoreFile)) {
             keyStore.load(fis, keyStorePassword.toCharArray());
         }
         Certificate cert = keyStore.getCertificate(keyAlias);
         if (cert == null) throw new RuntimeException("Certificate not found for alias: " + keyAlias);
-        return (RSAPublicKey) cert.getPublicKey();
+        return cert.getPublicKey();
     }
 }
